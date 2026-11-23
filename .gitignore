@@ -3,3 +3,5 @@ node_modules/
 package.json
 package-lock.json
 *.png.bak
+shot_*.png
+s_*.png

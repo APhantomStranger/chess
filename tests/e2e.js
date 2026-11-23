@@ -1,17 +1,19 @@
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
-const EXE = '/opt/pw-browsers/chromium-1243/chrome-linux64/chrome';
+const EXE = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1243/chrome-linux64/chrome';
+const DIR = process.argv[2] || '.';                       // what to serve: repo root by default
+const VER = require('fs').readFileSync('build.py','utf8').match(/VERSION = '([^']+)'/)[1];
 let pass=0, fail=0;
 const ok=(c,m)=>{ if(c){pass++;console.log('  ok  ',m);} else {fail++;console.log('  FAIL',m);} };
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 (async()=>{
-  const srv = spawn('python3',['-m','http.server','8765','--directory','dist/pwa'],{stdio:'ignore'}); await sleep(800);
-  const URL='http://localhost:8765/index.html';
+  const srv = spawn('python3',['-m','http.server','8765','--directory',DIR],{stdio:'ignore'}); await sleep(800);
+  const APP_URL='http://localhost:8765/index.html';
   const b = await chromium.launch({executablePath:EXE, args:['--no-sandbox']});
   const ctx = await b.newContext({viewport:{width:412,height:915},isMobile:true,hasTouch:true});
   const errs=[];
   let p;
-  const newPage=async()=>{const pg=await ctx.newPage(); pg.on('pageerror',e=>{errs.push(e.message);console.log('PAGEERR',e.message)}); await pg.goto(URL); await pg.waitForTimeout(600); return pg;};
+  const newPage=async()=>{const pg=await ctx.newPage(); pg.on('pageerror',e=>{errs.push(e.message);console.log('PAGEERR',e.message)}); await pg.goto(APP_URL); await pg.waitForTimeout(600); return pg;};
   p = await newPage();
   const ev=(f,a)=>p.evaluate(f,a);
   const idx=n=>(8-(+n[1]))*8+'abcdefgh'.indexOf(n[0]);
@@ -21,7 +23,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
   console.log('[boot]');
   ok(await ev(()=>document.querySelectorAll('.piece').length)===32,'32 pieces');
-  ok((await ev(()=>document.querySelector('.ver').textContent))==='2.1.0','version 2.1.0 shown');
+  ok((await ev(()=>document.querySelector('.ver').textContent))===VER,`version ${VER} shown`);
   await ev(()=>{ const d=document.getElementById('difficulty'); d.value='1'; d.dispatchEvent(new Event('change')); });
 
   console.log('[slower opponent]');
@@ -105,13 +107,31 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const man = await (await fetch('http://localhost:8765/manifest.webmanifest')).json();
   ok(man.display==='standalone','manifest still standalone');
   const sw = await (await fetch('http://localhost:8765/sw.js')).text();
-  ok(/gambit-chess-2\.1\.0/.test(sw),'service worker cache bumped to 2.1.0');
+  ok(sw.includes('gambit-chess-'+VER),`service worker cache is gambit-chess-${VER}`);
   await p.evaluate(()=>navigator.serviceWorker.ready); await p.reload(); await p.waitForTimeout(600);
   ok(await ev(()=>!!navigator.serviceWorker.controller),'service worker controls the page');
   const cdp = await ctx.newCDPSession(p);
   try{ const r = await cdp.send('Page.getInstallabilityErrors'); ok(r.installabilityErrors.length===0,'no installability errors '+JSON.stringify(r.installabilityErrors)); }catch(e){ console.log('  (installability API n/a)'); }
+  console.log('[root install + old location]');
+  const rootHtml = await (await fetch('http://localhost:8765/index.html')).text();
+  ok(/<link rel="manifest" href="manifest\.webmanifest">/.test(rootHtml),'root index.html links the manifest');
+  ok(/serviceWorker/.test(rootHtml),'root index.html registers the service worker');
+  ok((await fetch('http://localhost:8765/icons/icon-512.png')).ok,'root icons served');
+  ok((await fetch('http://localhost:8765/chess.html')).ok,'single-file chess.html still at the root');
+  const oldPg = await ctx.newPage();
+  await oldPg.goto('http://localhost:8765/chess-pwa/chess-pwa/index.html');
+  await oldPg.waitForURL(u=>u.pathname.replace(/index\.html$/,'').endsWith('/'),{timeout:10000}).catch(()=>{});
+  await oldPg.waitForTimeout(600);
+  const landed = new URL(oldPg.url()).pathname;
+  ok(landed==='/' || landed==='/index.html',`old location redirects to the root (landed on ${landed})`);
+  ok(await oldPg.evaluate(()=>document.querySelectorAll('.piece').length)===32,'and the game loads there');
+  await oldPg.close();
+  const retire = await (await fetch('http://localhost:8765/chess-pwa/chess-pwa/sw.js')).text();
+  ok(/registration\.unregister\(\)/.test(retire),'old service worker retires itself');
+  ok(!/caches\.delete/.test(retire),'old service worker does not clear the shared cache storage');
+
   for(const [w,h] of [[360,740],[412,915],[1280,900]]){
-    const pg = await ctx.newPage(); await pg.setViewportSize({width:w,height:h}); await pg.goto(URL); await pg.waitForTimeout(500);
+    const pg = await ctx.newPage(); await pg.setViewportSize({width:w,height:h}); await pg.goto(APP_URL); await pg.waitForTimeout(500);
     const m = await pg.evaluate(()=>({b:Math.round(document.getElementById('board').getBoundingClientRect().width),sw:document.documentElement.scrollWidth,vw:innerWidth}));
     ok(m.sw<=m.vw && m.b>=Math.min(w-30,300),`${w}x${h}: board ${m.b}px, no horizontal scroll`); await pg.close();
   }

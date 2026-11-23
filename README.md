@@ -3,14 +3,16 @@
 A single-player chess game against a built-in engine. Vanilla HTML, CSS and
 JavaScript, no runtime dependencies, no network calls once loaded.
 
-**Current version: 2.1.0**
+**Current version: 2.1.1**
 
 ## What's in the repo
 
 | Path | What it is |
 | --- | --- |
-| `index.html` / `chess.html` | the whole game in one self-contained file (icons inlined) |
-| `chess-pwa/chess-pwa/` | the installable version — same game plus `manifest.webmanifest`, `sw.js` and icon files |
+| `index.html` | the game, served at the site root — this is the installable app |
+| `manifest.webmanifest`, `sw.js`, `icons/` | what makes the root install as a standalone app and run offline |
+| `chess.html` | the whole game in one self-contained file, icons inlined — for sideloading or emailing |
+| `chess-pwa/chess-pwa/` | redirect stub only; the app used to live here |
 | `src/shell.html` | **source**: markup, CSS and UI logic |
 | `src/core.js` | **source**: chess engine, move generation, SAN, AI search |
 | `assets/` | app icons (192, 512, apple-touch, favicon) |
@@ -25,9 +27,8 @@ Edit `src/`, never the generated HTML, then:
 python3 build.py
 ```
 
-That regenerates `index.html`, `chess.html`, `chess-pwa/chess-pwa/` and
-`dist/chess-pwa.zip`. The version number lives in one place: `VERSION` at the
-top of `build.py`.
+That regenerates every file in the table above plus `dist/chess-pwa.zip`. The
+version number lives in one place: `VERSION` at the top of `build.py`.
 
 ## Testing
 
@@ -38,10 +39,20 @@ npm i playwright-core && node tests/e2e.js    # full browser suite
 
 ## Installing it on a phone
 
-The single file plays fine from anywhere, but Chrome can only install a
-*standalone* app from a folder served over HTTPS with a real manifest and a
-service worker — that's `chess-pwa/chess-pwa/`. Serve that folder, delete any
-old home-screen shortcut, then use Chrome's **Install app**.
+Open the site root in Chrome and use the menu's **Install app**, or the
+**Install app** button at the bottom of the page. It then runs full screen as
+its own app, with the queen icon, and works offline.
+
+Chrome will only install a *standalone* app from a page served over HTTPS that
+has a real manifest and a service worker, which is why those three files sit at
+the root next to `index.html`. `chess.html` on its own cannot be installed that
+way — a single file cannot register a service worker — so it opens in a normal
+browser tab.
+
+The app moved to the root in 2.1.1. It used to live at
+`chess-pwa/chess-pwa/`, which now just redirects. If you installed it from the
+old address, delete that home-screen icon and install again from the root; your
+W/L record and saved game carry over, since both addresses are the same origin.
 
 ## Features
 
