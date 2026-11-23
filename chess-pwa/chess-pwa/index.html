@@ -154,6 +154,9 @@ body{
 .piece.b{color:#000000;
   text-shadow:calc(var(--rim)*-.55) 0 0 #fff,calc(var(--rim)*.55) 0 0 #fff,0 calc(var(--rim)*-.55) 0 #fff,0 calc(var(--rim)*.55) 0 #fff}
 .piece.gone{opacity:0;z-index:1}
+/* the computer's move glides slowly so you can watch the piece travel */
+.pieces.slow .piece{transition:transform .8s cubic-bezier(.34,.03,.22,1), opacity .24s ease}
+.pieces.slow .piece.gone{transition:opacity .26s ease .5s}
 
 /* ---------- status ---------- */
 .status{
@@ -253,6 +256,25 @@ select.sel:focus{outline:2px solid var(--brass-dim);outline-offset:1px}
 }
 .promo-choices .pc:hover{border-color:var(--brass);background:var(--bg3);transform:translateY(-2px)}
 
+/* opening history & theory modal */
+.modal.theory{max-width:470px;text-align:left}
+.modal.theory h2{font-size:21px;margin:0 0 3px}
+.modal.theory .eyebrow{margin-bottom:9px}
+.theory-wrap{position:relative;margin:12px 0 16px}
+.theory-wrap::after{ /* fades the text at the edge so it's clear there's more to scroll */
+  content:"";position:absolute;left:0;right:7px;bottom:0;height:38px;pointer-events:none;
+  background:linear-gradient(to top,#241c16,rgba(36,28,22,0));opacity:1;transition:opacity .2s ease;
+}
+.theory-wrap.end::after{opacity:0}
+.theory-body{max-height:min(52vh,420px);overflow-y:auto;padding-right:7px}
+.theory-body h3{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--brass);margin:15px 0 5px}
+.theory-body h3:first-child{margin-top:0}
+.theory-body p{font-size:13.5px;line-height:1.56;color:var(--ink-dim);margin:0}
+.theory-body .mv-line{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink);background:var(--bg);border:1px solid var(--line-soft);border-radius:8px;padding:10px 12px;line-height:1.75}
+.theory-body::-webkit-scrollbar{width:8px}
+.theory-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+#btnTheory{width:100%;margin-top:10px}
+
 /* result flavor */
 .modal.win h2{color:#e7c96b}
 .modal.lose h2{color:var(--red)}
@@ -312,7 +334,7 @@ select.sel:focus{outline:2px solid var(--brass-dim);outline-offset:1px}
   .actions{grid-template-columns:repeat(2,1fr)}
 }
 @media (prefers-reduced-motion:reduce){
-  .piece{transition:none}
+  .piece,.pieces.slow .piece{transition:none}
   .status .dot,.sq.hint::after{animation:none}
 }
 </style>
@@ -863,6 +885,7 @@ function hintMove(st){ return bestByAlphaBeta(st, 3, true, Date.now()+1500).move
             <label for="openingSel">Opening</label>
             <select class="sel" id="openingSel"></select>
             <div class="desc" id="openingDesc"></div>
+            <button class="btn" id="btnTheory"><span class="ic">❖</span>History &amp; theory</button>
           </div>
           <div class="row-tgl" style="margin-bottom:6px">
             <span class="tl">Computer follows the line</span>
@@ -901,6 +924,18 @@ function hintMove(st){ return bestByAlphaBeta(st, 3, true, Date.now()+1500).move
     <div class="row-btn">
       <button class="btn primary" id="endNew"><span class="ic">◈</span>New game</button>
       <button class="btn" id="endReview">Review board</button>
+    </div>
+  </div>
+</div>
+
+<!-- opening history & theory modal -->
+<div class="overlay" id="theoryOverlay">
+  <div class="modal theory">
+    <div class="eyebrow" id="theoryEyebrow">Opening</div>
+    <h2 id="theoryTitle">Opening</h2>
+    <div class="theory-wrap" id="theoryWrap"><div class="theory-body" id="theoryBody"></div></div>
+    <div class="row-btn">
+      <button class="btn primary" id="theoryClose">Close</button>
     </div>
   </div>
 </div>
@@ -1138,7 +1173,8 @@ const DIFF_DESC = {
 const GLYPH = {k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
 const PVAL  = {p:1,n:3,b:3,r:5,q:9};
 const FILES = 'abcdefgh';
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
+const AI_PAUSE_MS = 2000;         // the computer waits this long before replying
 document.querySelectorAll('.ver').forEach(function(e){ e.textContent = APP_VERSION; });
 document.title = 'Chess — The Club Table v' + APP_VERSION;
 
@@ -1352,13 +1388,15 @@ function renderPieces(prevBoard){
       el.style.transform = transformFor(i);
     }
   }
-  // captured / removed pieces
+  // captured / removed pieces — a slow (computer) move keeps the captured
+  // piece on the board until the capturing piece has arrived on top of it
+  const goneDelay = piecesEl.classList.contains('slow') ? 840 : 220;
   pieceEls.forEach(function(el, id){
     if(!seen.has(id)){
       el.classList.add('gone');
       const dead = el;
       pieceEls.delete(id);
-      setTimeout(function(){ if(dead && dead.parentNode) dead.parentNode.removeChild(dead); }, 220);
+      setTimeout(function(){ if(dead && dead.parentNode) dead.parentNode.removeChild(dead); }, goneDelay);
     }
   });
 }
@@ -1568,7 +1606,8 @@ function applyMove(m, byHuman){
   const k = posKey(state);
   posCounts[k] = (posCounts[k]||0) + 1;
 
-  // visuals
+  // visuals — the computer's pieces glide slowly so the move is easy to follow
+  piecesEl.classList.toggle('slow', !byHuman);
   renderPieces(prevBoard);
   paintPersistentHL();
   updateTrays();
@@ -1658,7 +1697,7 @@ async function triggerAI(){
   // guard against stale replies (undo / new game happened)
   if(myGen !== generation) return;
   // minimum visible thinking time for snappy levels
-  const minDelay = book ? 550 : (level>=6 ? 0 : (level>=5 ? 120 : 320));
+  const minDelay = AI_PAUSE_MS;   // always pause first, so the reply never flashes past
   const wait = Math.max(0, minDelay - (Date.now()-t0));
   setTimeout(function(){
     if(myGen !== generation) return;
@@ -1701,6 +1740,7 @@ promoOverlay.addEventListener('click', function(e){
    Undo / Redo
    ============================================================ */
 function restoreFromHistory(){
+  piecesEl.classList.remove('slow');
   state = history.length ? history[history.length-1].post : ENG.initialState();
   rebuildDerived();
   // rerender pieces to match state (no animation)
@@ -1814,6 +1854,7 @@ function resolveSide(){
   return sideChoice;
 }
 function setupBoardDOM(){
+  piecesEl.classList.remove('slow');
   // labels
   document.getElementById('topWho').textContent = 'Computer ('+colorName(humanColor==='w'?'b':'w')+')';
   document.getElementById('botWho').textContent = 'You ('+colorName(humanColor)+')';
@@ -1953,6 +1994,12 @@ document.getElementById('btnSound').onclick = function(){
 /* keyboard niceties */
 document.addEventListener('keydown', function(e){
   if(e.target.tagName==='SELECT') return;
+  // a dialog is open: Escape closes it, every other shortcut is ignored
+  const openOverlay = document.querySelector('.overlay.show');
+  if(openOverlay){
+    if(e.key==='Escape'){ if(openOverlay.id==='theoryOverlay') closeTheory(); else if(openOverlay.id==='promoOverlay'){ promoOverlay.classList.remove('show'); inputLock=false; deselect(); } }
+    return;
+  }
   if(e.key==='u' || e.key==='U' || (e.key==='ArrowLeft')) { undo(); }
   else if(e.key==='r' || e.key==='R' || (e.key==='ArrowRight')) { redo(); }
   else if(e.key==='h' || e.key==='H') { hint(); }
@@ -1967,36 +2014,110 @@ document.addEventListener('keydown', function(e){
    always plays the side named in `side`; the other side is the book reply.
    ============================================================ */
 const OPENINGS = [
-  {id:'italian',  side:'w', name:'Italian Game',         blurb:'Develop fast, aim the bishop at f7, castle early.',
-   line:'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6 d3 d6 O-O O-O'},
-  {id:'ruy',      side:'w', name:'Ruy Lopez',            blurb:'Pressure the knight that guards e5; a classic since the 1500s.',
-   line:'e4 e5 Nf3 Nc6 Bb5 a6 Ba4 Nf6 O-O Be7 Re1 b5 Bb3 d6 c3 O-O'},
-  {id:'qg',       side:'w', name:'Queen’s Gambit',  blurb:'Offer a pawn to win the centre; Black can’t really keep it.',
-   line:'d4 d5 c4 e6 Nc3 Nf6 Bg5 Be7 e3 O-O Nf3 Nbd7'},
-  {id:'london',   side:'w', name:'London System',        blurb:'A sturdy, low-theory setup you can play against almost anything.',
-   line:'d4 d5 Bf4 Nf6 e3 e6 Nf3 c5 c3 Nc6 Nbd2 Bd6 Bg3 O-O'},
-  {id:'english',  side:'w', name:'English Opening',      blurb:'Start with the c-pawn and fight for the centre from the flank.',
-   line:'c4 e5 Nc3 Nf6 Nf3 Nc6 g3 d5 cxd5 Nxd5 Bg2 Nb6 O-O Be7'},
-  {id:'scotch',   side:'w', name:'Scotch Game',          blurb:'Open the centre right away with d4 and play actively.',
-   line:'e4 e5 Nf3 Nc6 d4 exd4 Nxd4 Nf6 Nxc6 bxc6 e5 Qe7 Qe2 Nd5 c4 Ba6'},
-  {id:'kg',       side:'w', name:'King’s Gambit',   blurb:'Sacrifice the f-pawn for a fast attack. Sharp and romantic.',
-   line:'e4 e5 f4 exf4 Nf3 g5 h4 g4 Ne5 Nf6 Bc4 d5 exd5 Bd6'},
-  {id:'sicilian', side:'b', name:'Sicilian Defense',     blurb:'Black’s sharpest reply to 1.e4: trade the c-pawn for White’s centre pawn.',
-   line:'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6 Be2 e5 Nb3 Be7 O-O O-O'},
-  {id:'french',   side:'b', name:'French Defense',       blurb:'Solid pawn chain; strike back at White’s centre with ...c5.',
-   line:'e4 e6 d4 d5 Nc3 Nf6 Bg5 Be7 e5 Nfd7 Bxe7 Qxe7 f4 O-O Nf3 c5'},
-  {id:'caro',     side:'b', name:'Caro-Kann Defense',    blurb:'Rock-solid: ...c6 and ...d5, then get the light bishop out.',
-   line:'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng3 Bg6 h4 h6 Nf3 Nd7 h5 Bh7'},
-  {id:'scand',    side:'b', name:'Scandinavian Defense', blurb:'Hit e4 on move one and recapture with the queen.',
-   line:'e4 d5 exd5 Qxd5 Nc3 Qa5 d4 Nf6 Nf3 c6 Bc4 Bf5 Bd2 e6'},
-  {id:'kid',      side:'b', name:'King’s Indian Defense', blurb:'Let White build a big centre, then attack it from the wings.',
-   line:'d4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O Be2 e5 O-O Nc6'},
-  {id:'slav',     side:'b', name:'Slav Defense',         blurb:'Defend d5 with ...c6 and keep the bishop outside the pawns.',
-   line:'d4 d5 c4 c6 Nf3 Nf6 Nc3 dxc4 a4 Bf5 e3 e6 Bxc4 Bb4'},
-  {id:'nimzo',    side:'b', name:'Nimzo-Indian Defense', blurb:'Pin the knight with ...Bb4 and fight for e4.',
-   line:'d4 Nf6 c4 e6 Nc3 Bb4 e3 O-O Bd3 d5 Nf3 c5 O-O Nc6'},
-  {id:'pirc',     side:'b', name:'Pirc Defense',         blurb:'Fianchetto the bishop and strike at the centre later.',
-   line:'e4 d6 d4 Nf6 Nc3 g6 Nf3 Bg7 Be2 O-O O-O c6'}
+  {id:'italian',  side:'w', name:'Italian Game', eco:'C50–C54',
+   blurb:'Develop fast, aim the bishop at f7, castle early.',
+   line:'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6 d3 d6 O-O O-O Bb3 a6 Nbd2 Ba7',
+   history:'One of the oldest openings in the written record. Italian masters of the 16th and 17th centuries — Giulio Cesare Polerio and later Gioachino Greco — worked it out in detail, and it has been called the Giuoco Piano, "the quiet game", ever since. It was the standard opening of the romantic era before the Ruy Lopez took over, and it came back into fashion at the top level in the 2010s.',
+   when:'A good default when you play 1.e4 and your opponent answers 1...e5. You get natural development and clear plans without memorising long forcing lines, which makes it one of the best openings to learn first.',
+   idea:'The bishop on c4 points at f7, the weakest square in Black’s camp, while c3 and d3 prepare to build a broad pawn centre with d4. The modern treatment (the "Giuoco Pianissimo") holds back d4, castles, and manoeuvres the queen’s knight to f1 and g3 before opening the position.'},
+
+  {id:'ruy',      side:'w', name:'Ruy Lopez', eco:'C60–C99',
+   blurb:'Pressure the knight that guards e5; a classic since the 1500s.',
+   line:'e4 e5 Nf3 Nc6 Bb5 a6 Ba4 Nf6 O-O Be7 Re1 b5 Bb3 d6 c3 O-O h3 Na5 Bc2 c5',
+   history:'Named after Ruy López de Segura, a Spanish priest who analysed it in his book of 1561. It was largely forgotten until 19th-century analysts revived it, and from then on it became the main battleground of 1.e4 e5 — used by every world champion from Steinitz onwards. Players also call it the Spanish Game.',
+   when:'When you want the most testing answer to 1...e5 and you are willing to learn some theory. It rewards patient, strategic play rather than quick tactics.',
+   idea:'Bb5 attacks the knight that defends e5. The threat is usually slow rather than immediate, and White spends several moves on h3, c3 and d4 to build the ideal centre while the bishop retreats along the a2–g8 diagonal. The line shown is the Chigorin, where Black manoeuvres ...Na5 and ...c5 to hit the centre from the queenside.'},
+
+  {id:'qg',       side:'w', name:'Queen’s Gambit', eco:'D06–D69',
+   blurb:'Offer a pawn to win the centre; Black can’t really keep it.',
+   line:'d4 d5 c4 e6 Nc3 Nf6 Bg5 Be7 e3 O-O Nf3 Nbd7 Rc1 c6 Bd3 dxc4',
+   history:'Documented as early as the Göttingen manuscript of the 1490s, and the defining opening of top-level chess in the first half of the 20th century. Capablanca, Alekhine and Euwe contested world championship matches in these positions, and the Queen’s Gambit Declined is still regarded as one of the soundest ways to meet 1.d4.',
+   when:'When you open 1.d4 and want a sound, strategic game with a lasting space advantage. It is less tactical than 1.e4 openings and suits players who like steady pressure.',
+   idea:'It is not really a gambit: after 2.c4 Black cannot hold the extra pawn, so White is effectively trading a wing pawn for a strong centre. The line shown is the Orthodox Defence, where Black finishes development before releasing the tension with ...dxc4.'},
+
+  {id:'london',   side:'w', name:'London System', eco:'D02 / A46',
+   blurb:'A sturdy, low-theory setup you can play against almost anything.',
+   line:'d4 d5 Bf4 Nf6 e3 e6 Nf3 c5 c3 Nc6 Nbd2 Bd6 Bg3 O-O Bd3 b6 O-O Bb7',
+   history:'The name comes from the London tournament of 1922, where several leading masters adopted the setup. For decades it was considered a quiet club-player system, then it became genuinely fashionable in the 2010s once top grandmasters, Magnus Carlsen among them, started using it to sidestep preparation.',
+   when:'When you want one reliable setup you can play against nearly every Black reply, with very little to memorise. Ideal if you would rather spend your time on middlegames than on opening theory.',
+   idea:'Get the dark-squared bishop outside the pawn chain to f4 before playing e3, so it never ends up shut in. Then build the solid c3 / e3 / Nbd2 structure, castle, and look for e4 or a kingside attack with Ne5 and a queen lift.'},
+
+  {id:'english',  side:'w', name:'English Opening', eco:'A10–A39',
+   blurb:'Start with the c-pawn and fight for the centre from the flank.',
+   line:'c4 e5 Nc3 Nf6 Nf3 Nc6 g3 d5 cxd5 Nxd5 Bg2 Nb6 O-O Be7 a3 O-O b4 Be6',
+   history:'Named after Howard Staunton, the strongest English player of his day, who used it in his 1843 match against Saint-Amant. It was treated as eccentric for a long time, then adopted as a main weapon by Botvinnik, Karpov and Kasparov, and it is now a completely respectable first move.',
+   when:'When you want to avoid the heavily analysed main lines of 1.e4 and 1.d4 and steer the game toward structures you understand well. It transposes often, so it also suits players who like flexibility.',
+   idea:'Control d5 from the side rather than occupying the centre immediately. With 1...e5 the game often becomes a Sicilian Defence with colours reversed and an extra move for White, which is why the fianchetto on g2 and the queenside expansion with a3 and b4 are so natural here.'},
+
+  {id:'scotch',   side:'w', name:'Scotch Game', eco:'C44–C45',
+   blurb:'Open the centre right away with d4 and play actively.',
+   line:'e4 e5 Nf3 Nc6 d4 exd4 Nxd4 Nf6 Nxc6 bxc6 e5 Qe7 Qe2 Nd5 c4 Ba6 b3 O-O-O Bb2 g6',
+   history:'Known since the early 1800s and named after a correspondence match between the Edinburgh and London chess clubs that began in 1824. It fell out of top-level use for most of the 20th century until Garry Kasparov revived it in the 1990s as a surprise weapon against the Ruy Lopez specialists.',
+   when:'When you want to open the position immediately and get your pieces moving, and when you would rather not study the long main lines of the Ruy Lopez.',
+   idea:'The early d4 trades off Black’s centre pawn and frees White’s pieces at once. The line shown is the Mieses Variation: White gains space with e5, Black doubles White out of the centre with ...bxc6 and pins the c4 pawn with ...Ba6, and both kings often end up on opposite wings.'},
+
+  {id:'kg',       side:'w', name:'King’s Gambit', eco:'C30–C39',
+   blurb:'Sacrifice the f-pawn for a fast attack. Sharp and romantic.',
+   line:'e4 e5 f4 exf4 Nf3 g5 h4 g4 Ne5 Nf6 Bc4 d5 exd5 Bd6 d4 Nh5 Bb5 c6',
+   history:'The signature opening of the romantic era. Anderssen, Morphy and their contemporaries played it constantly in the 19th century, and the most famous games of that period come from these positions. Improved defensive technique pushed it out of elite practice, but it remains a dangerous practical try and still appears in rapid and blitz.',
+   when:'When you want an open, attacking game and are happy to give up a pawn to get the initiative. Best at faster time controls, or against an opponent who defends uncomfortably.',
+   idea:'Giving up the f-pawn pulls Black’s e-pawn away from the centre and opens the f-file for the rook. White follows with Nf3, Bc4 and d4, aiming at f7 and the exposed Black king. The line shown is the Kieseritzky Gambit, the main test of the whole opening.'},
+
+  {id:'sicilian', side:'b', name:'Sicilian Defense', eco:'B20–B99',
+   blurb:'Black’s sharpest reply to 1.e4: trade the c-pawn for White’s centre pawn.',
+   line:'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6 Be2 e5 Nb3 Be7 O-O O-O Be3 Be6 Qd2 Nbd7',
+   history:'First described by the Italian priest Pietro Carrera in 1617 and given its name by the English master Jacob Sarratt in the early 1800s. It became the most popular and most heavily analysed answer to 1.e4 in the second half of the 20th century, carried by Fischer, Kasparov and generations since. The variation shown is the Najdorf, named after Miguel Najdorf.',
+   when:'When you play Black and want to fight for the win rather than settle for equality. It creates an unbalanced position from move one, but it is sharp, so it demands real preparation.',
+   idea:'Trading the c-pawn for White’s d-pawn leaves Black with an extra central pawn and a half-open c-file for counterplay against White’s queenside. The modest-looking 5...a6 of the Najdorf takes b5 away from White’s pieces and prepares ...e5 or ...e6 with a flexible, resilient structure.'},
+
+  {id:'french',   side:'b', name:'French Defense', eco:'C00–C19',
+   blurb:'Solid pawn chain; strike back at White’s centre with ...c5.',
+   line:'e4 e6 d4 d5 Nc3 Nf6 Bg5 Be7 e5 Nfd7 Bxe7 Qxe7 f4 O-O Nf3 c5 Qd2 Nc6 O-O-O c4',
+   history:'It takes its name from a correspondence match of 1834 in which the Paris club used it against London. Nimzowitsch built much of his theory of blockade around these positions, and Botvinnik, Korchnoi and Uhlmann made it a lifelong weapon. It has a reputation as the most stubborn of the replies to 1.e4.',
+   when:'When you want something solid and strategically rich against 1.e4, and you do not mind defending a cramped position for a while in return for a clear plan.',
+   idea:'...e6 and ...d5 challenge the centre at once, and when White pushes e5 the game becomes a battle of pawn chains: Black attacks the base of White’s chain with ...c5 and ...f6, while White attacks on the kingside. The cost is the light-squared bishop on c8, which is hemmed in by Black’s own pawn on e6 — freeing it is a standing theme.'},
+
+  {id:'caro',     side:'b', name:'Caro-Kann Defense', eco:'B10–B19',
+   blurb:'Rock-solid: ...c6 and ...d5, then get the light bishop out.',
+   line:'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng3 Bg6 h4 h6 Nf3 Nd7 h5 Bh7 Bd3 Bxd3 Qxd3 e6',
+   history:'Named after Horatio Caro and Marcus Kann, who analysed it in the 1880s. It was long dismissed as too passive, then taken up by a run of world champions — Capablanca, Botvinnik, Petrosian, Karpov and Anand — who showed how little White can do against it. It remains one of the most reliable defences in the game.',
+   when:'When you want the soundness of the French Defence without locking in your light-squared bishop, and you are happy to play for a solid structure and a safe endgame.',
+   idea:'...c6 supports ...d5 while leaving the c8 bishop free to come out to f5 before Black plays ...e6. Black concedes a little space and some time, but the pawn structure has no weaknesses, and the resulting endgames are often comfortable.'},
+
+  {id:'scand',    side:'b', name:'Scandinavian Defense', eco:'B01',
+   blurb:'Hit e4 on move one and recapture with the queen.',
+   line:'e4 d5 exd5 Qxd5 Nc3 Qa5 d4 Nf6 Nf3 c6 Bc4 Bf5 Bd2 e6 Qe2 Bb4 O-O-O Nbd7',
+   history:'The oldest opening recorded in print — it appears in Lucena’s work at the end of the 15th century — and also known as the Centre Counter. It was long treated as inferior because the queen comes out early, until Bent Larsen famously beat Anatoly Karpov with it in 1979 and brought it back into serious practice.',
+   when:'When you want to take the game into your own territory from the very first move, with far less theory to learn than the Sicilian or the French. A good practical choice if you dislike facing a wide range of White setups.',
+   idea:'Black challenges e4 immediately and recaptures with the queen, accepting a tempo loss when White plays Nc3. In exchange, Black gets a clean, symmetrical pawn structure, easy development with ...c6, ...Bf5 and ...e6, and no cramped pieces.'},
+
+  {id:'kid',      side:'b', name:'King’s Indian Defense', eco:'E60–E99',
+   blurb:'Let White build a big centre, then attack it from the wings.',
+   line:'d4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O Be2 e5 O-O Nc6 d5 Ne7 Ne1 Nd7',
+   history:'Treated as dubious for most of chess history, because it hands White the centre. Soviet players — Bronstein, Boleslavsky and Geller — turned it into a main weapon in the 1940s and 50s by showing how strong Black’s counterattack can be, and Fischer and Kasparov made it feared at the very top.',
+   when:'When you are playing for a win with Black and want a sharp, attacking game. It is uncompromising: the positions are double-edged, and quiet draws are rare.',
+   idea:'Black fianchettoes on g7 and lets White occupy the centre, then strikes back with ...e5 or ...c5. In the classical line shown, White closes the centre with d5 and expands on the queenside while Black regroups the knights and throws the f- and g-pawns at White’s king. Both players attack on opposite wings, and speed decides it.'},
+
+  {id:'slav',     side:'b', name:'Slav Defense', eco:'D10–D19',
+   blurb:'Defend d5 with ...c6 and keep the bishop outside the pawns.',
+   line:'d4 d5 c4 c6 Nf3 Nf6 Nc3 dxc4 a4 Bf5 e3 e6 Bxc4 Bb4 O-O Nbd7 Qe2 Bg6',
+   history:'Named for the Slavic masters who developed it — Alapin, Alekhine, Bogoljubov and Euwe among them — in the 1920s and 30s. It featured heavily in the world championship matches of that era and has never gone out of fashion; it is a main defence to the Queen’s Gambit at every level today.',
+   when:'When you want to meet 1.d4 and 2.c4 solidly but dislike shutting the light-squared bishop in behind ...e6, as the Queen’s Gambit Declined does.',
+   idea:'...c6 holds d5 while leaving the c8 bishop free to develop to f5 or g4. Black can take on c4 at the right moment and hold the pawn briefly with ...b5, so White usually prevents that with a4 — which slightly weakens b4 and gives Black a square for the bishop.'},
+
+  {id:'nimzo',    side:'b', name:'Nimzo-Indian Defense', eco:'E20–E59',
+   blurb:'Pin the knight with ...Bb4 and fight for e4.',
+   line:'d4 Nf6 c4 e6 Nc3 Bb4 e3 O-O Bd3 d5 Nf3 c5 O-O Nc6 a3 Bxc3 bxc3 dxc4',
+   history:'Devised by Aron Nimzowitsch in the 1920s as a flagship of the hypermodern school, which argued that the centre is better controlled from a distance than occupied. It is considered one of the soundest answers to 1.d4 ever found, and many strong players meet 3.Nc3 with it every single game.',
+   when:'When you face 1.d4 and want a defence with an excellent reputation that gives Black real chances to play for a win without taking undue risk.',
+   idea:'...Bb4 pins the c3 knight, which is White’s main support for the e4 push. Black is usually happy to exchange bishop for knight: it gives White doubled c-pawns, and Black then blockades them with ...c5, ...b6 and ...Na5 while playing on the light squares.'},
+
+  {id:'pirc',     side:'b', name:'Pirc Defense', eco:'B07–B09',
+   blurb:'Fianchetto the bishop and strike at the centre later.',
+   line:'e4 d6 d4 Nf6 Nc3 g6 Nf3 Bg7 Be2 O-O O-O c6 a4 Nbd7 h3 e5',
+   history:'Named after the Slovenian grandmaster Vasja Pirc, who championed it in the 1930s and 40s. Like the other hypermodern defences it was long considered too accommodating, and only became fully respectable in the 1960s and 70s once players saw how hard the counterattack is to meet in practice.',
+   when:'When you want an unbalanced, flexible game against 1.e4 and are content to let White take space first. It is useful as a surprise weapon because White has many setups to choose from and cannot prepare them all.',
+   idea:'Black develops behind the pawns, fianchettoes on g7, and waits. Once White has committed to a setup, Black hits the centre with ...e5 or ...c5. The bishop on g7 bears down the long diagonal, and the whole defence stands or falls on timing that central break correctly.'}
 ];
 OPENINGS.forEach(function(o){ o.tokens = o.line.split(' '); });
 
@@ -2107,6 +2228,41 @@ document.getElementById('openingSel').addEventListener('change', function(e){
   openingId = e.target.value; syncGuideUI(); savePrefs();
   if(guideOn && !gameEnded && !aiThinking && state.turn!==humanColor && bookReply()) triggerAI();
 });
+/* ---- history & theory ---- */
+const theoryOverlay = document.getElementById('theoryOverlay');
+function numberedLine(tokens){
+  const out = [];
+  for(let i=0;i<tokens.length;i+=2){
+    out.push((i/2+1)+'. '+tokens[i]+(tokens[i+1] ? ' '+tokens[i+1] : ''));
+  }
+  return out.join('\u00a0\u00a0 ');
+}
+function showTheory(){
+  const o = getOpening();
+  document.getElementById('theoryTitle').textContent = o.name;
+  document.getElementById('theoryEyebrow').textContent =
+    (o.side==='w' ? 'White opening' : 'Black defense') + ' \u00b7 ECO ' + o.eco;
+  document.getElementById('theoryBody').innerHTML =
+    '<div class="mv-line">'+numberedLine(o.tokens)+'</div>'+
+    '<h3>History</h3><p>'+o.history+'</p>'+
+    '<h3>When to play it</h3><p>'+o.when+'</p>'+
+    '<h3>The idea behind it</h3><p>'+o.idea+'</p>';
+  const body = document.getElementById('theoryBody');
+  body.scrollTop = 0;
+  theoryOverlay.classList.add('show');
+  markTheoryEnd();
+}
+function closeTheory(){ theoryOverlay.classList.remove('show'); }
+function markTheoryEnd(){
+  const body = document.getElementById('theoryBody'), wrap = document.getElementById('theoryWrap');
+  const atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - 4;
+  wrap.classList.toggle('end', atEnd);
+}
+document.getElementById('theoryBody').addEventListener('scroll', markTheoryEnd);
+document.getElementById('btnTheory').onclick = showTheory;
+document.getElementById('theoryClose').onclick = closeTheory;
+theoryOverlay.addEventListener('click', function(e){ if(e.target===theoryOverlay) closeTheory(); });
+
 document.getElementById('guideNewAs').onclick = function(){
   const side = this.dataset.side;
   sideChoice = side;

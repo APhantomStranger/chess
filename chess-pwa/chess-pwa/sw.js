@@ -1,5 +1,5 @@
-/* Chess service worker v2.0.0 */
-const CACHE = 'gambit-chess-2.0.0';
+/* Chess service worker v2.1.0 */
+const CACHE = 'gambit-chess-2.1.0';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'];
 self.addEventListener('install', function(e){ e.waitUntil(caches.open(CACHE).then(function(c){ return c.addAll(SHELL); }).then(function(){ return self.skipWaiting(); })); });
 self.addEventListener('activate', function(e){
